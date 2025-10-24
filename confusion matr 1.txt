@@ -1,0 +1,30 @@
+import seaborn as sns
+import pandas as pd
+from pycm import ConfusionMatrix
+import matplotlib.pyplot as plt
+
+# Example confusion matrix for 5-class fruit dataset
+confusion_matrix = {
+    "Apple":      {"Apple": 95, "Banana": 2, "Grape": 1, "Mango": 1, "Strawberry": 1},
+    "Banana":     {"Apple": 1, "Banana": 96, "Grape": 0, "Mango": 2, "Strawberry": 1},
+    "Grape":      {"Apple": 2, "Banana": 1, "Grape": 93, "Mango": 3, "Strawberry": 1},
+    "Mango":      {"Apple": 1, "Banana": 0, "Grape": 2, "Mango": 96, "Strawberry": 1},
+    "Strawberry": {"Apple": 0, "Banana": 1, "Grape": 1, "Mango": 0, "Strawberry": 98}
+}
+
+# Create ConfusionMatrix object
+cm2 = ConfusionMatrix(matrix=confusion_matrix)
+
+# Print classification report
+print(cm2)
+
+# Convert to pandas DataFrame for seaborn heatmap
+df = pd.DataFrame(confusion_matrix).T
+
+# Plot Confusion Matrix
+plt.figure(figsize=(10, 8))
+sns.heatmap(df, annot=True, fmt="d", cmap="YlGnBu", cbar=True, linewidths=0.5)
+plt.title("Confusion Matrix for Fruit Classification (e.g., MobileNetV2 Model)", fontsize=14)
+plt.ylabel("Predicted Label", fontsize=12)
+plt.xlabel("Actual Label", fontsize=12)
+plt.show()
