@@ -1,0 +1,170 @@
+#EXERCISE 6
+# --------------------------
+# STEP 1: Import libraries
+# --------------------------
+import numpy as np
+from tensorflow.keras.applications import InceptionResNetV2
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+from tensorflow.keras.utils import to_categorical
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+import os
+import cv2
+import random
+
+
+# --------------------------
+# STEP 2: Paths and parameters
+# --------------------------
+base_split = "/content/drive/MyDrive/extracted_data/Apple_Split"
+train_dir = base_split + "/train"
+val_dir   = base_split + "/val"
+test_dir  = base_split + "/test"
+
+IMG_SIZE = (299, 299)  # InceptionResNetV2 input
+BATCH_SIZE = 32
+
+
+# --------------------------
+# STEP 3: Data generators (rescale only)
+# --------------------------
+datagen = ImageDataGenerator(rescale=1./255)
+
+train_gen = datagen.flow_from_directory(train_dir, target_size=IMG_SIZE,
+                                        batch_size=BATCH_SIZE, class_mode='categorical', shuffle=False)
+val_gen = datagen.flow_from_directory(val_dir, target_size=IMG_SIZE,
+                                      batch_size=BATCH_SIZE, class_mode='categorical', shuffle=False)
+test_gen = datagen.flow_from_directory(test_dir, target_size=IMG_SIZE,
+                                       batch_size=BATCH_SIZE, class_mode='categorical', shuffle=False)
+
+
+# --------------------------
+# STEP 4: Load InceptionResNetV2 base (no top, global avg pooling)
+# --------------------------
+base_model = InceptionResNetV2(weights="imagenet", include_top=False, pooling="avg", input_shape=(299, 299, 3))
+
+# Extract features
+X_train = base_model.predict(train_gen, verbose=1)
+X_val   = base_model.predict(val_gen, verbose=1)
+X_test  = base_model.predict(test_gen, verbose=1)
+
+y_train = train_gen.classes
+y_val   = val_gen.classes
+y_test  = test_gen.classes
+
+num_classes = len(train_gen.class_indices)
+
+print("✅ Feature extraction done")
+print("Train features shape:", X_train.shape)
+print("Validation features shape:", X_val.shape)
+print("Test features shape:", X_test.shape)
+
+
+# --------------------------
+# STEP 5: Convert labels to one-hot and build classifier
+# --------------------------
+y_train_cat = to_categorical(y_train, num_classes)
+y_val_cat   = to_categorical(y_val, num_classes)
+y_test_cat  = to_categorical(y_test, num_classes)
+
+# Classifier on top of features
+model = Sequential([
+    Dense(256, activation="relu", input_shape=(X_train.shape[1],)),
+    Dropout(0.5),
+    Dense(num_classes, activation="softmax")
+])
+
+model.compile(optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"])
+
+checkpoint = ModelCheckpoint(
+    os.path.join(base_split, "inceptionresnet_feature_best.h5"),
+    monitor="val_accuracy",
+    save_best_only=True,
+    verbose=1
+)
+early_stop = EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)
+
+
+# --------------------------
+# STEP 6: Train classifier
+# --------------------------
+history = model.fit(
+    X_train, y_train_cat,
+    validation_data=(X_val, y_val_cat),
+    epochs=20,        # can reduce to 10 if you want
+    batch_size=32,
+    callbacks=[checkpoint, early_stop],
+    verbose=1
+)
+
+
+# --------------------------
+# STEP 7: Evaluate on test set
+# --------------------------
+test_loss, test_acc = model.evaluate(X_test, y_test_cat, verbose=1)
+print(f"Test Accuracy: {test_acc:.4f}")
+
+
+# --------------------------
+# STEP 8: Classification report + confusion matrix
+# --------------------------
+y_pred = np.argmax(model.predict(X_test), axis=1)
+class_labels = list(train_gen.class_indices.keys())
+
+print("\nClassification Report:\n")
+from sklearn.metrics import classification_report, confusion_matrix
+print(classification_report(y_test, y_pred, target_names=class_labels))
+
+# Confusion matrix
+cm = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(5,5))
+sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=class_labels, yticklabels=class_labels)
+plt.xlabel("Predicted")
+plt.ylabel("True")
+plt.title("Confusion Matrix - InceptionResNetV2")
+plt.show()
+
+
+# --------------------------
+# STEP 9: Visualize some predictions
+# --------------------------
+# Get all test images and labels
+test_images, test_labels = [], []
+for cls in os.listdir(test_dir):
+    cls_path = os.path.join(test_dir, cls)
+    for img_name in os.listdir(cls_path):
+        test_images.append(os.path.join(cls_path, img_name))
+        test_labels.append(cls)
+
+# Pick random samples
+n_images = 4
+samples = random.sample(list(zip(test_images, test_labels)), n_images)
+
+plt.figure(figsize=(12,12))
+for i, (img_path, true_label) in enumerate(samples):
+    img = cv2.imread(img_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img_resized = cv2.resize(img, IMG_SIZE) / 255.0
+    img_array = np.expand_dims(img_resized, axis=0)
+
+    # Extract features and predict
+    features = base_model.predict(img_array)
+    pred = model.predict(features)
+    pred_class = np.argmax(pred, axis=1)[0]
+    pred_label = class_labels[pred_class]
+
+    # Plot
+    plt.subplot(3,3,i+1)
+    plt.imshow(img)
+    color = "green" if pred_label==true_label else "red"
+    plt.title(f"True: {true_label}\nPred: {pred_label}", color=color)
+    plt.axis("off")
+
+plt.tight_layout()
+plt.show()
+
+

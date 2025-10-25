@@ -1,0 +1,276 @@
+from google.colab import drive
+drive.mount('/content/drive')
+
+
+import os
+import shutil
+import random
+
+orig_train = "/content/drive/MyDrive/datadl/train"
+orig_val   = "/content/drive/MyDrive/datadl/val"
+
+base_split = "/content/drive/MyDrive/extracted_data/Apple_Split"
+train_dir = os.path.join(base_split, "train")
+val_dir   = os.path.join(base_split, "val")
+test_dir  = os.path.join(base_split, "test")
+
+for split_dir in [train_dir, val_dir, test_dir]:
+    os.makedirs(split_dir, exist_ok=True)
+
+classes = os.listdir(orig_train)
+
+# Make class subfolders
+for split_dir in [train_dir, val_dir, test_dir]:
+    for cls in classes:
+        os.makedirs(os.path.join(split_dir, cls), exist_ok=True)
+
+# Copy train and val images to new split folders
+for cls in classes:
+    # TRAIN
+    train_imgs = [f for f in os.listdir(os.path.join(orig_train, cls)) if os.path.isfile(os.path.join(orig_train, cls, f))]
+    random.shuffle(train_imgs)
+    for img in train_imgs[:50]:  # take 50 images for train
+        shutil.copy(os.path.join(orig_train, cls, img), os.path.join(train_dir, cls, img))
+
+    # VAL
+    val_imgs = [f for f in os.listdir(os.path.join(orig_val, cls)) if os.path.isfile(os.path.join(orig_val, cls, f))]
+    random.shuffle(val_imgs)
+    for img in val_imgs[:50]:  # take 50 images for val
+        shutil.copy(os.path.join(orig_val, cls, img), os.path.join(val_dir, cls, img))
+
+    # TEST (take remaining images from train+val combined)
+    all_imgs = train_imgs + val_imgs
+    remaining = list(set(all_imgs) - set(train_imgs[:50]) - set(val_imgs[:50]))
+    test_imgs = random.sample(remaining, 50)
+    for img in test_imgs:
+        # Check if image is in train or val folder
+        if os.path.exists(os.path.join(orig_train, cls, img)):
+            shutil.copy(os.path.join(orig_train, cls, img), os.path.join(test_dir, cls, img))
+        else:
+            shutil.copy(os.path.join(orig_val, cls, img), os.path.join(test_dir, cls, img))
+
+print("✅ Dataset split into train/val/test with 50 images each per class")
+
+
+# --------------------------
+# STEP 3: Build InceptionResNetV2 model
+# --------------------------
+import matplotlib.pyplot as plt
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.applications import InceptionResNetV2
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Dropout
+from tensorflow.keras.models import Model
+from tensorflow.keras import optimizers
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+from tensorflow.keras.applications.inception_resnet_v2 import preprocess_input
+
+# Image size & batch
+IMG_SIZE = (299, 299)
+BATCH_SIZE = 32
+
+# Data generators
+train_datagen = ImageDataGenerator(preprocessing_function=preprocess_input)
+val_datagen = ImageDataGenerator(preprocessing_function=preprocess_input)
+test_datagen = ImageDataGenerator(preprocessing_function=preprocess_input)
+
+train_generator = train_datagen.flow_from_directory(
+    train_dir,
+    target_size=IMG_SIZE,
+    batch_size=BATCH_SIZE,
+    class_mode="categorical"
+)
+
+val_generator = val_datagen.flow_from_directory(
+    val_dir,
+    target_size=IMG_SIZE,
+    batch_size=BATCH_SIZE,
+    class_mode="categorical"
+)
+
+test_generator = test_datagen.flow_from_directory(
+    test_dir,
+    target_size=IMG_SIZE,
+    batch_size=BATCH_SIZE,
+    class_mode="categorical",
+    shuffle=False
+)
+
+# Load InceptionResNetV2 base
+base_model = InceptionResNetV2(weights="imagenet", include_top=False, input_shape=(299,299,3))
+
+# Add custom top
+x = base_model.output
+x = GlobalAveragePooling2D()(x)
+x = Dense(256, activation="relu")(x)
+x = Dropout(0.5)(x)
+predictions = Dense(len(train_generator.class_indices), activation="softmax")(x)
+
+model = Model(inputs=base_model.input, outputs=predictions)
+
+# Freeze base layers
+for layer in base_model.layers:
+    layer.trainable = False
+
+# Compile
+model.compile(optimizer=optimizers.Adam(learning_rate=0.0001),
+              loss="categorical_crossentropy",
+              metrics=["accuracy"])
+
+# Callbacks
+checkpoint = ModelCheckpoint(
+    os.path.join(base_split, "inceptionresnet_best.h5"),
+    monitor="val_accuracy",
+    save_best_only=True,
+    verbose=1
+)
+early_stop = EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)
+
+
+# --------------------------
+# STEP 4: Train InceptionResNetV2 model
+# --------------------------
+from tensorflow.keras.applications import InceptionResNetV2
+from tensorflow.keras.layers import Dense, Dropout, GlobalAveragePooling2D
+from tensorflow.keras.models import Model
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+import os
+import matplotlib.pyplot as plt
+
+# Build model
+base_model = InceptionResNetV2(weights="imagenet", include_top=False, input_shape=(299,299,3))
+
+x = GlobalAveragePooling2D()(base_model.output)
+x = Dense(256, activation="relu")(x)
+x = Dropout(0.5)(x)
+predictions = Dense(len(train_generator.class_indices), activation="softmax")(x)
+
+model = Model(inputs=base_model.input, outputs=predictions)
+
+# Freeze base layers
+for layer in base_model.layers:
+    layer.trainable = False
+
+# Compile
+model.compile(optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"])
+
+# Callbacks
+checkpoint = ModelCheckpoint(
+    os.path.join(base_split, "inceptionresnet_best.h5"),
+    monitor="val_accuracy",
+    save_best_only=True,
+    verbose=1
+)
+early_stop = EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)
+
+# Train
+history = model.fit(
+    train_generator,
+    steps_per_epoch=len(train_generator),
+    epochs=7,  # you can increase/decrease
+    validation_data=val_generator,
+    validation_steps=len(val_generator),
+    callbacks=[checkpoint, early_stop],
+    verbose=1
+)
+
+# --------------------------
+# Plot training history
+# --------------------------
+def plot_history(history):
+    acc = history.history["accuracy"]
+    val_acc = history.history["val_accuracy"]
+    loss = history.history["loss"]
+    val_loss = history.history["val_loss"]
+    epochs_range = range(1, len(acc)+1)
+
+    plt.figure()
+    plt.title("Training and Validation Accuracy")
+    plt.plot(epochs_range, acc, "bo-", label="Training acc")
+    plt.plot(epochs_range, val_acc, "ro-", label="Validation acc")
+    plt.legend()
+    plt.show()
+
+    plt.figure()
+    plt.title("Training and Validation Loss")
+    plt.plot(epochs_range, loss, "bo-", label="Training loss")
+    plt.plot(epochs_range, val_loss, "ro-", label="Validation loss")
+    plt.legend()
+    plt.show()
+
+plot_history(history)
+
+# --------------------------
+# Save final model
+# --------------------------
+model.save(os.path.join(base_split, "inceptionresnet_final.h5"))
+print("✅ InceptionResNetV2 model saved successfully!")
+
+
+# --------------------------
+# STEP 5: Evaluate + Confusion Matrix
+# --------------------------
+import numpy as np
+from sklearn.metrics import classification_report, confusion_matrix
+import seaborn as sns
+
+# Best validation accuracy
+best_val_acc = max(history.history['val_accuracy'])
+print(f"Best Validation Accuracy: {best_val_acc:.4f}")
+
+# Evaluate on test set
+test_loss, test_acc = model.evaluate(test_generator, steps=len(test_generator), verbose=1)
+print(f"Test Accuracy: {test_acc:.4f}")
+
+# Predictions
+y_pred = model.predict(test_generator, steps=len(test_generator), verbose=1)
+y_pred_classes = np.argmax(y_pred, axis=1)
+y_true = test_generator.classes
+class_labels = list(test_generator.class_indices.keys())
+
+# Classification report
+print("\nClassification Report:\n")
+print(classification_report(y_true, y_pred_classes, target_names=class_labels))
+
+# Confusion matrix
+cm = confusion_matrix(y_true, y_pred_classes)
+plt.figure(figsize=(6,6))
+sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=class_labels, yticklabels=class_labels)
+plt.xlabel("Predicted")
+plt.ylabel("True")
+plt.title("Confusion Matrix - InceptionResNetV2")
+plt.show()
+
+
+# --------------------------
+# STEP 6: Visualize some predictions
+# --------------------------
+def visualize_predictions(model, generator, class_labels, n_images=4):
+    x_batch, y_batch = next(generator)
+    preds = model.predict(x_batch)
+    pred_classes = np.argmax(preds, axis=1)
+    true_classes = np.argmax(y_batch, axis=1)
+
+    plt.figure(figsize=(6,6))
+    for i in range(n_images):
+        plt.subplot(3,3,i+1)
+        plt.imshow(x_batch[i])
+        true_label = class_labels[true_classes[i]]
+        pred_label = class_labels[pred_classes[i]]
+        color = "green" if true_label==pred_label else "red"
+        plt.title(f"True: {true_label}\nPred: {pred_label}", color=color)
+        plt.axis("off")
+    plt.tight_layout()
+    plt.show()
+
+# Re-create test generator with shuffle=True
+test_vis_gen = test_datagen.flow_from_directory(
+    test_dir,
+    target_size=(299,299),
+    batch_size=9,
+    class_mode="categorical",
+    shuffle=True
+)
+
+visualize_predictions(model, test_vis_gen, class_labels, n_images=4)
+
+

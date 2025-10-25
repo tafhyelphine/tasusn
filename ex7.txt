@@ -1,0 +1,206 @@
+
+# Apple Leaf Disease Captioning using InceptionResNetV2
+
+
+import os
+import numpy as np
+import pickle
+from tqdm import tqdm
+from tensorflow.keras.preprocessing.image import load_img, img_to_array
+from tensorflow.keras.applications import InceptionResNetV2
+from tensorflow.keras.applications.inception_resnet_v2 import preprocess_input
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.utils import to_categorical, plot_model
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Dense, LSTM, Embedding, Dropout, add
+from tensorflow.keras.callbacks import ModelCheckpoint
+from pickle import dump, load
+
+# ----------------------------
+# 1. Paths
+# ----------------------------
+base_dir = "/content/drive/MyDrive/extracted_data/Apple_Split"
+train_dir = os.path.join(base_dir, "train")
+val_dir   = os.path.join(base_dir, "val")
+
+train_images_file = os.path.join(base_dir, "trainimages.txt")
+val_images_file   = os.path.join(base_dir, "validationimages.txt")
+train_descriptions_file = os.path.join(base_dir, "captions.txt")
+val_descriptions_file   = os.path.join(base_dir, "validation_captions.txt")
+
+train_features_file = os.path.join(base_dir, "features_train_inceptionresnetv2.pkl")
+val_features_file   = os.path.join(base_dir, "features_val_inceptionresnetv2.pkl")
+
+# ----------------------------
+# 2. Feature Extraction using InceptionResNetV2
+# ----------------------------
+print(" Loading InceptionResNetV2 model...")
+conv_base = InceptionResNetV2(weights='imagenet', include_top=False, pooling='avg')
+
+def extract_features(directory, output_file):
+    features = {}
+    image_count = 0
+    for root, dirs, files in os.walk(directory):
+        for file in tqdm(files, desc=f"Processing {os.path.basename(directory)}"):
+            if file.lower().endswith(('.jpg', '.jpeg', '.png')):
+                filepath = os.path.join(root, file)
+                try:
+                    img = load_img(filepath, target_size=(299, 299))
+                    img = img_to_array(img)
+                    img = np.expand_dims(img, axis=0)
+                    img = preprocess_input(img)
+
+                    feature = conv_base.predict(img, verbose=0)
+                    key = os.path.splitext(file)[0]
+                    features[key] = feature
+                    image_count += 1
+                except Exception as e:
+                    print(f" Error processing {file}: {e}")
+    with open(output_file, 'wb') as f:
+        pickle.dump(features, f)
+    print(f" Extracted features for {image_count} images, saved to {output_file}")
+    return features
+
+
+# 3. Utility Functions for Captions
+def load_doc(filename):
+    with open(filename, 'r') as file:
+        return file.read()
+
+def load_set(filename):
+    doc = load_doc(filename)
+    return set(line.strip().split('.')[0] for line in doc.split('\n') if len(line) > 0)
+
+def load_clean_descriptions(description_filename, dataset, features):
+    doc = load_doc(description_filename)
+    descriptions = dict()
+    for line in doc.split('\n'):
+        if len(line) < 1:
+            continue
+        parts = line.split('#')
+        if len(parts) < 2:
+            continue
+        image_id = parts[0].split('.')[0]
+        caption_text = parts[1][2:].strip()
+        if image_id in dataset and image_id in features:
+            if image_id not in descriptions:
+                descriptions[image_id] = list()
+            descriptions[image_id].append('startseq ' + caption_text + ' endseq')
+    return descriptions
+
+def load_photo_features(filename, dataset):
+    all_features = pickle.load(open(filename, 'rb'))
+    features = {k: all_features[k] for k in dataset if k in all_features}
+    return features
+
+def to_lines(descriptions):
+    all_desc = []
+    for key in descriptions.keys():
+        [all_desc.append(d) for d in descriptions[key]]
+    return all_desc
+
+def create_tokenizer(descriptions):
+    lines = to_lines(descriptions)
+    tokenizer = Tokenizer()
+    tokenizer.fit_on_texts(lines)
+    return tokenizer
+
+def max_length(descriptions):
+    lines = to_lines(descriptions)
+    return max(len(d.split()) for d in lines)
+
+def create_sequences(tokenizer, max_length, descriptions, photos, vocab_size):
+    n_sequences = sum([len(desc_list)*(max_length-1) for desc_list in descriptions.values()])
+    X1 = np.zeros((n_sequences, 1536), dtype=np.float32)  # InceptionResNetV2 output = 1536
+    X2 = np.zeros((n_sequences, max_length), dtype=np.int32)
+    y  = np.zeros((n_sequences, vocab_size), dtype=np.float32)
+    i = 0
+    for key, desc_list in descriptions.items():
+        photo_feature = photos[key][0]
+        for desc in desc_list:
+            seq = tokenizer.texts_to_sequences([desc])[0]
+            for j in range(1, len(seq)):
+                in_seq, out_seq = seq[:j], seq[j]
+                in_seq = pad_sequences([in_seq], maxlen=max_length, padding='post')[0]
+                out_seq = to_categorical([out_seq], num_classes=vocab_size)[0]
+                X1[i] = photo_feature
+                X2[i] = in_seq
+                y[i]  = out_seq
+                i += 1
+    return X1, X2, y
+
+
+# 4. Load datasets
+
+train_set = load_set(train_images_file)
+train_features = load_photo_features(train_features_file, train_set)
+train_descriptions = load_clean_descriptions(train_descriptions_file, train_set, train_features)
+
+val_set = load_set(val_images_file)
+val_features = load_photo_features(val_features_file, val_set)
+val_descriptions = load_clean_descriptions(val_descriptions_file, val_set, val_features)
+
+print(f" Loaded {len(train_descriptions)} training and {len(val_descriptions)} validation descriptions")
+
+# 5. Prepare tokenizer
+
+tokenizer = create_tokenizer(train_descriptions)
+vocab_size = len(tokenizer.word_index) + 1
+max_len = max_length(train_descriptions)
+print(f" Vocabulary Size: {vocab_size}, Max Caption Length: {max_len}")
+
+
+# 6. Create sequences
+
+X1train, X2train, ytrain = create_sequences(tokenizer, max_len, train_descriptions, train_features, vocab_size)
+X1val, X2val, yval     = create_sequences(tokenizer, max_len, val_descriptions, val_features, vocab_size)
+
+# 7. Define model
+
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Dense, Embedding, LSTM, Dropout, add
+
+def define_model(vocab_size, max_length):
+    inputs1 = Input(shape=(1536,))
+    fe1 = Dropout(0.5)(inputs1)
+    fe2 = Dense(256, activation='relu')(fe1)
+
+    inputs2 = Input(shape=(max_length,))
+    se1 = Embedding(vocab_size, 256, mask_zero=True)(inputs2)
+    se2 = Dropout(0.5)(se1)
+    se3 = LSTM(256, use_cudnn=False)(se2)  # Fix cuDNN masking issue
+
+    decoder1 = add([fe2, se3])
+    decoder2 = Dense(256, activation='relu')(decoder1)
+    outputs = Dense(vocab_size, activation='softmax')(decoder2)
+
+    model = Model(inputs=[inputs1, inputs2], outputs=outputs)
+    model.compile(loss='categorical_crossentropy', optimizer='adam')
+
+    model.summary()
+    plot_model(model, to_file='apple_caption_model.png', show_shapes=True)
+    return model
+
+model = define_model(vocab_size, max_len)
+
+# 8. Train model
+
+checkpoint = ModelCheckpoint(
+    os.path.join(base_dir, "apple_caption_best_model_inceptionresnetv2.h5"),
+    monitor='val_loss', save_best_only=True, verbose=1
+)
+
+history = model.fit(
+    [X1train, X2train], ytrain,
+    epochs=30, batch_size=32,
+    validation_data=([X1val, X2val], yval),
+    callbacks=[checkpoint],
+    verbose=1
+)
+
+# 9. Save tokenizer & model
+
+dump(tokenizer, open(os.path.join(base_dir, "tokenizer_inceptionresnetv2.pkl"), 'wb'))
+model.save(os.path.join(base_dir, "model_inceptionresnetv2.h5"))
+print(" Model and tokenizer saved successfully!")
