@@ -4,8 +4,7 @@ from tensorflow.keras.preprocessing.image import load_img,img_to_array
 import numpy as np
 import matplotlib.pyplot as plt
 
-model_name = "ResNet50"
-path = "bird.jpg"
+model_name = "InceptionV3"
 
 models = {
     "VGG16":(VGG16,(224,224),imagenet_utils.preprocess_input),
@@ -16,8 +15,7 @@ models = {
 }
 
 model,size,preprocess = models[model_name]
-Model = model(weights = "imagenet")
-img = load_img("/content/bird.jpeg",target_size = size)
+img = load_img("/content/animal.jpg",target_size = size)
 
 # Display the image
 plt.imshow(img)
@@ -28,8 +26,9 @@ arr = img_to_array(img)
 img = np.expand_dims(arr,0)
 img = preprocess(img)
 
+Model = model(weights = "imagenet")
 preds = Model.predict(img)
-decoded = imagenet_utils.decode_predictions(preds,top= 3)[0]
+decoded = imagenet_utils.decode_predictions(preds,top= 5)[0]
 
 for (i,(id,label,prob)) in enumerate(decoded):
     print(f"{i+1} {label} : {prob*100:.2f}%")
