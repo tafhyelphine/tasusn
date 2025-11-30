@@ -6,7 +6,6 @@ from keras.models import Model, Sequential
 from keras.layers import Dense
 import matplotlib.pyplot as plt
 from numpy import expand_dims
-import numpy as np
 
 # ==========================================================
 # 1️⃣ Load and summarize VGG16 model
@@ -15,12 +14,6 @@ print("\n=== LAYER VIS 1 ===\n")
 
 model = VGG16()
 model.summary()
-
-# Simple text summary visualization
-plt.figure(figsize=(10, 1))
-plt.text(0.01, 0.5, "VGG16 Model Loaded Successfully", fontsize=16, ha='left', va='center')
-plt.axis('off')
-plt.show()
 
 # ==========================================================
 # 2️⃣ Visualize Filters from Second Layer
@@ -55,7 +48,7 @@ print("\n=== LAYER VIS 3 — FEATURE MAPS FROM FIRST CONV LAYER ===\n")
 layer_model = Model(inputs=model.inputs, outputs=model.layers[1].output)
 
 # Load and preprocess image
-img = load_img('bird.jpg', target_size=(224, 224))
+img = load_img('/content/bird.jpeg', target_size=(224, 224))
 img = img_to_array(img)
 img = expand_dims(img, axis=0)
 img = preprocess_input(img)
@@ -115,14 +108,14 @@ simple_model.add(Dense(1, activation='sigmoid'))
 simple_model.summary()
 
 # Draw using Matplotlib
-plt.figure(figsize=(8, 3))
-plt.text(0.05, 0.6, 'Input Layer (1 neuron)', fontsize=12, bbox=dict(facecolor='lightblue', alpha=0.5))
-plt.text(0.4, 0.6, 'Dense Layer (2, ReLU)', fontsize=12, bbox=dict(facecolor='lightgreen', alpha=0.5))
-plt.text(0.75, 0.6, 'Output Layer (1, Sigmoid)', fontsize=12, bbox=dict(facecolor='lightcoral', alpha=0.5))
-plt.arrow(0.22, 0.62, 0.12, 0, head_width=0.02, head_length=0.02, fc='k', ec='k')
-plt.arrow(0.58, 0.62, 0.12, 0, head_width=0.02, head_length=0.02, fc='k', ec='k')
+# Very simple diagram (no colors, no boxes)
+plt.figure(figsize=(8, 2))
+plt.text(0.1, 0.5, 'Input (1)', fontsize=12)
+plt.text(0.4, 0.5, 'Dense (2, ReLU)', fontsize=12)
+plt.text(0.75, 0.5, 'Output (1, Sigmoid)', fontsize=12)
+plt.arrow(0.25, 0.5, 0.1, 0, width=0.001)
+plt.arrow(0.6, 0.5, 0.1, 0, width=0.001)
 plt.axis('off')
-plt.title("Simple Sequential Model Visualization", fontsize=14)
 plt.show()
 
-print("\n✅ All visualizations completed using only Matplotlib!")
+print("\n✅ All visualizations completed using only Matplotlib!")pleted using only Matplotlib!")
